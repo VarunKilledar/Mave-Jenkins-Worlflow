@@ -1,0 +1,34 @@
+version: 2.1
+executors:
+  maven-ecs-executor:
+    docker:
+      - image: circleci/openjdk:11-jdk
+
+jobs:
+  build:
+    executor: maven-ecs-executor
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 20.10.18
+      - run:
+          name: BUils and Push Docker Image
+          command: |
+            docker build -t ${IMAGE_REPO_NAME}:${IMAGE_TAG} .
+      - run:
+          name: Pushing to ECR
+          command: |
+            docekr tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${REPOSITORY_URI}:$IMAGE_TAG
+            aws sts-get-caller-identity
+            docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
+      - run:
+           name: Deploying to ECS
+           command: |
+              aws ecs describe-task-definition --task-definition ${TASKDEF_NAME} > task-def.json
+              jq .taskDefinition task-def.json > taskdefinition.json
+              jq 'del(.taskDefinitionArn)' taskdefinition.json | jq 'del(.revision)' | jq 'del(.status)' | jq 'del(.requiresAttributes)' | jq 'del(.compatibilities)' | jq 'del(.registeredAt)'| jq 'del(.registeredBy)' > container-definition.json
+              jq '.containerDefinitions[0].image = \"${REPOSITORY_URI}:${IMAGE_TAG}\"' container-definition.json > temp-taskdef.json
+              ls
+              cat temp-taskdef.json
+              aws ecs register-task-definition --cli-input-json file://temp-taskdef.json
+              aws ecs update-service --cluster  ${CLUSTER_NAME} --service  ${SERVICE_NAME} --task-definition  ${TASKDEF_NAME} 
